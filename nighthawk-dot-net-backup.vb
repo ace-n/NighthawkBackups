@@ -1,4 +1,4 @@
-' NOTE: Code can only go up to 11 layers deep (10 IF statements + 1 Function)
+' NOTE: Windows will only have one function executed upon them per scan
 
 Imports System
 Imports System.IO
@@ -13,15 +13,12 @@ Public Class Form1
     ' List of target windows (AllWindowsList)
     Dim AllWindowsList As New List(Of TargetWindowPlain)
 
-    ' This one keeps track of the recorded windows in each level
-    Dim CodeListOfWindows()() As TargetWindowPlain = New TargetWindowPlain(10)() {}
-
     ' DLL Functions used
     Declare Function GetForegroundWindow Lib "user32" () As Long
     Declare Function EnumWindows Lib "user32" (ByVal CallBackPtr As CallBack, ByVal lParam As Integer) As Boolean
     Declare Function IsWindowVisible Lib "user32" (ByVal Hwnd As Integer) As Boolean
     Declare Function DestroyWindow Lib "user32" (ByVal Hwnd As Integer)
-    Private Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
+    Public Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
 
         ' Get Nighthawk rules code (raw)
         Dim UserRank As Integer = 1 ' --> UPDATE!
@@ -44,7 +41,7 @@ Public Class Form1
 
         ' Nighthawk rules code variables
         Dim CodeLine As String
-        Dim CodeIfArray, CodeAllowedArray, CodeFuncArray As Array
+        Dim CodeIfArray, CodeFuncArray As Array
         Dim CodeIsIfLine As Boolean
         Dim DBGESC As Integer = 0
         Dim LayerCount As Integer = 0
@@ -57,14 +54,13 @@ Public Class Form1
             Dim WinArray As Array = AllWindowsList.ToArray
 
             ' Reset all rules code variables
-            Dim CodeFile As StreamReader = New StreamReader(RulesPath)
+            Dim CodeFile As StreamReader = New StreamReader(RulesPath)                              ' Actual rules code file
+            Dim CodeListOfWindows()() As TargetWindowPlain = New TargetWindowPlain(10)() {}         ' This one keeps track of the recorded windows in each level
 
             ' Parse each line of code
             While CodeFile.EndOfStream = False
 
                 CodeLine = CodeFile.ReadLine()
-
-                MsgBox("Code:" & CodeLine)
 
                 ' Organize code and execute non-if/function tasks
                 If True Then
@@ -87,7 +83,7 @@ Public Class Form1
 
                 ' Determine whether line is If or Function, and set up the relevant arrays
                 Dim CodeLineNoLMs As String
-                    CodeLineNoLMs = CodeLine.Replace("-->", "")
+                CodeLineNoLMs = CodeLine.Replace("-->", "")
 
                 If CodeLineNoLMs.Length > 2 Then
 
@@ -116,9 +112,6 @@ Public Class Form1
 
                     ' Get array of previously validated windows (if there are any)
                     LayerCount = Math.Floor(CodeLine.LastIndexOf("-->") / 3) + 1
-                    If (LayerCount > 0) Then
-                        CodeAllowedArray = CodeListOfWindows.GetValue(LayerCount - 1)
-                    End If
 
                     Dim TargetArrayLine As Array = Nothing
                     Dim Int As Integer = CodeIfArray.Length
@@ -130,30 +123,37 @@ Public Class Form1
                         DBGINT += 1
 
 
-                        ' Title(Type)
+                        ' Title (Type)
                         If IfCntr.Type = "title" Then
 
                             'Check each window in window list
                             For Each win As TargetWindowPlain In WinArray
 
-                                ' Get matching previous window
+
+                                ' Get # of times needle occurs in title
                                 Dim Title As String = win.Title
-                                If (LayerCount > 0) Then
-                                    Dim PastElement As TargetWindowPlain
-                                    PastElement = CodeAllowedArray.GetValue(Array.IndexOf(CodeAllowedArray, win))
+                                Dim IncidenceNum As Integer = GetCount(IfCntr.Needle, Title)
+
+                                ' Get/check count checks
+                                Dim InCountRange As Boolean = True
+                                If IfCntr.MaxKeyCount > 0 And IfCntr.MaxKeyCount < IncidenceNum Then
+                                    InCountRange = False
+                                End If
+                                If IfCntr.MinKeyCount > 0 And IfCntr.MinKeyCount > IncidenceNum Then
+                                    InCountRange = False
                                 End If
 
                                 ' Booleans (if the window satifies the condition, its truth count is increased by 1)
-                                If (IfCntr.BooleanMarker = "+" And Title.Contains(IfCntr.Needle)) Then
+                                If IfCntr.BooleanMarker = "+" And Title.Contains(IfCntr.Needle) And InCountRange Then
                                     win.TruthCount = win.TruthCount + 1
                                 End If
-                                If (IfCntr.BooleanMarker = "-" And (Title.Contains(IfCntr.Needle) = False)) Then
+                                If IfCntr.BooleanMarker = "-" And Title.Contains(IfCntr.Needle) = False And InCountRange Then
                                     win.TruthCount = win.TruthCount + 1
                                 End If
-                                If (IfCntr.BooleanMarker = "=" And Title = IfCntr.Needle) Then
+                                If IfCntr.BooleanMarker = "=" And Title = IfCntr.Needle Then
                                     win.TruthCount = win.TruthCount + 1
                                 End If
-                                If (IfCntr.BooleanMarker = "~" And Title <> IfCntr.Needle) Then
+                                If IfCntr.BooleanMarker = "~" And Title <> IfCntr.Needle Then
                                     win.TruthCount = win.TruthCount + 1
                                 End If
                             Next
@@ -165,6 +165,12 @@ Public Class Form1
 
                             ' Search through AllWindowsList for the proper window(s) to interact with
                             For Each ie As InternetExplorer In New ShellWindows()
+
+                                ' If window isn't an IE window, skip it (ShellWindows contains IE and normal folder windows)
+                                If ie.Name <> "Windows Internet Explorer" Then
+                                    Continue For
+                                End If
+
                                 ' Booleans
                                 If IfCntr.BooleanMarker = "+" And ie.LocationURL.Contains(IfCntr.Needle) Then
 
@@ -208,6 +214,86 @@ Public Class Form1
                                 End If
                             Next
                         End If
+
+                        ' HTML type
+                        If IfCntr.Type = "htmlc" Then
+                            Dim DocStr As String
+                            For Each ie As InternetExplorer In New ShellWindows()
+
+                                ' If window isn't an IE window, don't bother analyzing it for HTML content (ShellWindows() returns folders too)
+                                If ie.Name <> "Windows Internet Explorer" Then
+                                    Continue For
+                                End If
+
+                                ' If IE window is busy, let it load and investigate it later (to prevent null reference exceptions)
+                                If Not ie.Busy Then
+                                    DocStr = ie.Document.Body.InnerHTML
+                                Else
+                                    Continue For
+                                End If
+
+                                ' If HTML text is null, come back to it later (to prevent null reference exception)
+                                If String.IsNullOrWhiteSpace(DocStr) Then
+                                    Continue For
+                                End If
+
+                                Dim IncidenceNum As Integer = GetCount(IfCntr.Needle, DocStr)
+
+                                ' Get/check count checks
+                                Dim InCountRange As Boolean = True
+                                If IfCntr.MaxKeyCount > 0 And IfCntr.MaxKeyCount < IncidenceNum Then
+                                    InCountRange = False
+                                End If
+                                If IfCntr.MinKeyCount > 0 And IfCntr.MinKeyCount > IncidenceNum Then
+                                    InCountRange = False
+                                End If
+
+                                ' Booleans
+
+                                If IfCntr.BooleanMarker = "+" And DocStr.Contains(IfCntr.Needle) And InCountRange Then
+
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
+
+                                End If
+                                If IfCntr.BooleanMarker = "-" And DocStr.Contains(IfCntr.Needle) = False And InCountRange Then
+
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
+
+                                End If
+                                If IfCntr.BooleanMarker = "=" And DocStr = IfCntr.Needle Then
+
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
+
+                                End If
+                                If IfCntr.BooleanMarker = "~" And DocStr <> IfCntr.Needle Then
+
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
+
+                                End If
+
+                            Next
+                        End If
+
                     Next
                 End If
 
@@ -249,76 +335,87 @@ Public Class Form1
                         Next
                     End If
 
+                    ' DBG
+                    'If AddList.Count < 4 Then
+                    '    For Each win As TargetWindowPlain In AddList
+                    '        MsgBox("AddList " & win.Title)
+                    '    Next
+                    'End If
+
                     CodeListOfWindows.SetValue(AddList.ToArray, LayerCount)
 
                 End If
 
-                ' DEBUG ATM
-                If Not CodeIsIfLine Then
-
-                    For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
-
-                        If win.Title <> "" And win.TruthCount <> 1 Then
-                            Console.WriteLine("Truth: " & win.TruthCount & " / " & win.Title & " / " & CodeLineNoLMs)
-                        End If
-
-                    Next
-
-                    Array.Clear(CodeListOfWindows, LayerCount, 1)
-                End If
+                ' List of acted on windows
+                '   NOTE: Nighthawk won't act on windows who have been acted on in the current iteration
+                Dim CodeActedOnList As New List(Of Integer)
 
                 ' Function parsing
                 If Not CodeIsIfLine Then
 
-                    CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
+                    Try
 
-                    ' WIP
-                    For Each funcStr As String In CodeFuncArray
+                        CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
 
-                        ' Make sure function isn't nil
-                        If funcStr Is Nothing Then
-                            Continue For
-                        End If
-                        If funcStr.Length < 2 Or String.IsNullOrWhiteSpace(funcStr) Then
-                            Continue For
-                        End If
+                        ' WIP
+                        For Each funcStr As String In CodeFuncArray
 
-                        ' BROKEN
-                        Dim func As New FunctionPlain(funcStr)
-
-
-                        Dim FuncFirstArg As String = FunctionPlain.GetParam(func.Statement, 1)
-
-                        ' Entire window list commands (!Msg, !Snd)
-                        If (CodeListOfWindows.Count > 0) Then
-                            If func.Type = "!msg" Then
-                                MsgBox(FuncFirstArg)
+                            ' Make sure function isn't nil
+                            If funcStr Is Nothing Then
+                                Continue For
                             End If
-                            If func.Type = "!snd" Then
-                                My.Computer.Audio.Play(FuncFirstArg)
-                            End If
-                        End If
-
-                        For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
-
-                            ' DBG
-                            Console.WriteLine(win.Title)
-
-                            ' Per-window commands (!Dir, !ClP, !ClW, !DlP, !DlR, !Opn, !Cls) --> Delete process / Delete registry entries / Unlock (permissions) / Lock (permissions)
-                            If func.Type = "!clw" Then
-                                DestroyWindow(win.HWND)
+                            If funcStr.Length < 2 Or String.IsNullOrWhiteSpace(funcStr) Then
+                                Continue For
                             End If
 
-                            If func.Type = "!dir" Then
-                                For Each ie As InternetExplorer In New ShellWindows()
-                                    If ie.HWND = win.HWND Then
-                                        ie.Navigate(FuncFirstArg)
-                                    End If
-                                Next
+                            Dim func As New FunctionPlain(funcStr)
+                            Dim FuncFirstArg As String = FunctionPlain.GetParam(func.Statement, 1)
+
+                            ' Entire window list commands (!Msg, !Snd)
+                            If (CodeListOfWindows.Count > 0) Then
+                                If func.Type = "!msg" Then
+                                    MsgBox(FuncFirstArg)
+                                End If
+                                If func.Type = "!snd" Then
+                                    My.Computer.Audio.Play(FuncFirstArg)
+                                End If
                             End If
 
+                            For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
+
+                                ' Per-window commands (!Dir, !ClP, !ClW, !DlP, !DlR, !Opn, !Cls) --> Delete process / Delete registry entries / Unlock (permissions) / Lock (permissions)
+                                'If func.Type = "!clw" Then
+                                '   DestroyWindow(win.HWND)
+                                '   Add to acted on list
+                                '   CodeActedOnList.Add(ie.HWND)
+                                'End If
+
+
+                                If func.Type = "!dir" Then
+                                    For Each ie As InternetExplorer In New ShellWindows()
+                                        If ie.HWND = win.HWND And ie.Name = "Windows Internet Explorer" And (ie.Busy = False) Then
+
+                                            If (ie.ReadyState = 4 Or ie.ReadyState = 0) And Not (String.IsNullOrWhiteSpace(ie.LocationURL)) Then
+
+                                                ' Act on window if it hasn't been acted on
+                                                If Not CodeActedOnList.Contains(ie.HWND) Then
+                                                    ie.Navigate(FuncFirstArg)
+                                                End If
+
+                                                '  Add to acted on list
+                                                CodeActedOnList.Add(ie.HWND)
+                                            End If
+
+                                            Exit For
+                                        End If
+                                    Next
+                                End If
+
+                            Next
                         Next
-                    Next
+
+                    Catch ex As Exception
+                    End Try
 
                 End If
 
@@ -352,6 +449,32 @@ Public Class Form1
         ' This return statement is mandatory and CANNOT be changed without causing a bug
         Return hWnd
 
+    End Function
+
+    ' Get number of strings in another string
+    Private Function GetCount(ByVal Needle As String, ByVal Haystack As String) As String
+
+        ' Exit out if haystack or needle is nill
+        If String.IsNullOrEmpty(Needle) Or String.IsNullOrEmpty(Haystack) Then
+            Return 0
+        End If
+
+        ' Main checking part
+        Dim StrA As String = Needle
+        Dim Count As Integer = 0
+        While StrA.Contains(Needle)
+
+            ' Check for contained matches
+            StrA.Remove(StrA.IndexOf(Needle), Needle.Length)
+            Count += 1
+
+            ' Check for exact matches (String.Remove doesn't catch these)
+            If (StrA = Needle) Then
+                Exit While
+            End If
+
+        End While
+        Return Count
     End Function
 End Class
 
@@ -489,10 +612,10 @@ Public Class FunctionPlain
 
     ' Get param
     Public Shared Function GetParam(ByVal FuncStrA As String, ByVal Number As Integer)
-        For i = 0 To Number
+        For i = 1 To Number
             FuncStrA = SystemFunctions.TrimToChar(FuncStrA, " ", True, False).ToLower()
         Next
-        FuncStrA = SystemFunctions.TrimToChar(FuncStrA, " ", False, False).ToLower()
+        FuncStrA = SystemFunctions.TrimToChar(FuncStrA, ",", False, False).ToLower()
         Return FuncStrA
     End Function
 
@@ -575,11 +698,11 @@ Public Class TargetWindowPlain
     Declare Function GetWindowProcess Lib "user32" Alias "GetWindowThreadProcessId" (ByVal hWnd As IntPtr, ByVal lpdwProcessId As String) As String
 
     ' Property guide
-    ' x.HWND - returns Window Handle (HWND)
-    ' x.Title - returns Title
+    ' x.HWND    - returns Window Handle (HWND)
+    ' x.Title   - returns Title
     ' x.Process - returns Process
-    ' x.Path - returns Filepath of executable
-    ' x.Truth - returns truth count
+    ' x.Path    - returns Filepath of executable
+    ' x.Truth   - returns truth count
 
     ' Create Target Window data
     Dim TitleStr As New String(Nothing, 300)
@@ -638,11 +761,4 @@ Public Class TargetWindowPlain
     ' Get process path
 
     ' Get TargetWindowIE (if the window is an internet explorer window)
-End Class
-
-Public Class HTMLProcessing
-    ' Get all links
-    Shared Function GetLinks()
-
-    End Function
 End Class
