@@ -20,6 +20,7 @@ Public Class Form1
     Declare Function GetForegroundWindow Lib "user32" () As Long
     Declare Function EnumWindows Lib "user32" (ByVal CallBackPtr As CallBack, ByVal lParam As Integer) As Boolean
     Declare Function IsWindowVisible Lib "user32" (ByVal Hwnd As Integer) As Boolean
+    Declare Function DestroyWindow Lib "user32" (ByVal Hwnd As Integer)
     Private Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
 
         ' Get Nighthawk rules code (raw)
@@ -114,7 +115,7 @@ Public Class Form1
                     CodeIfArray = SystemFunctions.SeriesToIf(CodeLineNoLMs)
 
                     ' Get array of previously validated windows (if there are any)
-                    LayerCount = Math.Floor((CodeLine.LastIndexOf("-->") + 2) / 3)
+                    LayerCount = Math.Floor(CodeLine.LastIndexOf("-->") / 3) + 1
                     If (LayerCount > 0) Then
                         CodeAllowedArray = CodeListOfWindows.GetValue(LayerCount - 1)
                     End If
@@ -212,9 +213,10 @@ Public Class Form1
 
                 'MsgBox("Done " & CodeIfArray.Length)
 
+                LayerCount = Math.Floor(CodeLine.LastIndexOf("-->") / 3) + 1
+
                 'If all IF statements are complete, handle conjunctions and update the cumulative window list (CodeListOfWindows)
                 If CodeIsIfLine Then
-                    LayerCount = Math.Floor((CodeLine.LastIndexOf("-->") + 2) / 3)
                     Dim Conjunction As String = CodeLineNoLMs.Substring(0, 4)
 
                     ' Boolean handling
@@ -223,6 +225,7 @@ Public Class Form1
                     If Conjunction = ":NOR" Then
                         For Each win As TargetWindowPlain In WinArray
                             If win.TruthCount > 0 Then
+                                win.TruthCount = 0
                                 AddList.Add(win)
                             End If
                         Next
@@ -231,6 +234,7 @@ Public Class Form1
                     If Conjunction = ":XOR" Then
                         For Each win As TargetWindowPlain In WinArray
                             If win.TruthCount = 1 Then
+                                win.TruthCount = 0
                                 AddList.Add(win)
                             End If
                         Next
@@ -239,31 +243,84 @@ Public Class Form1
                     If Conjunction = ":AND" Then
                         For Each win As TargetWindowPlain In WinArray
                             If win.TruthCount = CodeIfArray.Length Then
+                                win.TruthCount = 0
                                 AddList.Add(win)
                             End If
                         Next
                     End If
 
                     CodeListOfWindows.SetValue(AddList.ToArray, LayerCount)
+
                 End If
 
                 ' DEBUG ATM
                 If Not CodeIsIfLine Then
-                    CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
 
-                    For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount)
+                    For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
 
                         If win.Title <> "" And win.TruthCount <> 1 Then
                             Console.WriteLine("Truth: " & win.TruthCount & " / " & win.Title & " / " & CodeLineNoLMs)
                         End If
-                        MsgBox("Recorded")
+
                     Next
 
                     Array.Clear(CodeListOfWindows, LayerCount, 1)
-
                 End If
 
+                ' Function parsing
+                If Not CodeIsIfLine Then
 
+                    CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
+
+                    ' WIP
+                    For Each funcStr As String In CodeFuncArray
+
+                        ' Make sure function isn't nil
+                        If funcStr Is Nothing Then
+                            Continue For
+                        End If
+                        If funcStr.Length < 2 Or String.IsNullOrWhiteSpace(funcStr) Then
+                            Continue For
+                        End If
+
+                        ' BROKEN
+                        Dim func As New FunctionPlain(funcStr)
+
+
+                        Dim FuncFirstArg As String = FunctionPlain.GetParam(func.Statement, 1)
+
+                        ' Entire window list commands (!Msg, !Snd)
+                        If (CodeListOfWindows.Count > 0) Then
+                            If func.Type = "!msg" Then
+                                MsgBox(FuncFirstArg)
+                            End If
+                            If func.Type = "!snd" Then
+                                My.Computer.Audio.Play(FuncFirstArg)
+                            End If
+                        End If
+
+                        For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
+
+                            ' DBG
+                            Console.WriteLine(win.Title)
+
+                            ' Per-window commands (!Dir, !ClP, !ClW, !DlP, !DlR, !Opn, !Cls) --> Delete process / Delete registry entries / Unlock (permissions) / Lock (permissions)
+                            If func.Type = "!clw" Then
+                                DestroyWindow(win.HWND)
+                            End If
+
+                            If func.Type = "!dir" Then
+                                For Each ie As InternetExplorer In New ShellWindows()
+                                    If ie.HWND = win.HWND Then
+                                        ie.Navigate(FuncFirstArg)
+                                    End If
+                                Next
+                            End If
+
+                        Next
+                    Next
+
+                End If
 
             End While
         End While
@@ -417,12 +474,13 @@ Public Class FunctionPlain
     ' x.Param(X) - returns parameter (X) of function ("" if null)
 
     Dim FuncStr As String
+    Dim TypeStr As String
     Public Sub New(ByVal FuncStrIn As String)
         FuncStr = FuncStrIn
+        TypeStr = SystemFunctions.TrimToChar(FuncStr, " ", False, False).ToLower
     End Sub
 
     ' Get type
-    Dim TypeStr As String = SystemFunctions.TrimToChar(FuncStr, " ", False, False).ToLower
     ReadOnly Property Type As String
         Get
             Return TypeStr
@@ -430,10 +488,20 @@ Public Class FunctionPlain
     End Property
 
     ' Get param
-    Function GetParam(ByVal FuncStr As FunctionPlain, ByVal Number As Integer)
-
+    Public Shared Function GetParam(ByVal FuncStrA As String, ByVal Number As Integer)
+        For i = 0 To Number
+            FuncStrA = SystemFunctions.TrimToChar(FuncStrA, " ", True, False).ToLower()
+        Next
+        FuncStrA = SystemFunctions.TrimToChar(FuncStrA, " ", False, False).ToLower()
+        Return FuncStrA
     End Function
 
+    ' Get whole string
+    ReadOnly Property Statement
+        Get
+            Return FuncStr
+        End Get
+    End Property
 End Class
 
 ' Finished
