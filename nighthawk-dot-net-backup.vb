@@ -38,6 +38,9 @@ Public Class Form1
 
     Public Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
 
+        ' Set process to realtime priority (faster scanning)
+        Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.RealTime
+
         ' Get Nighthawk rules code (raw)
         Dim UserRank As Integer = 1 ' --> UPDATE!
         If UserRank = 5 Then
@@ -125,11 +128,19 @@ Public Class Form1
 
         ' Dump all unneeded global variables in memory
         MyBase.Dispose()
-        ChildWinArray = Nothing
+        AllWindowsList.Clear()
+        If ChildWinArray IsNot Nothing Then
+            Array.Clear(ChildWinArray, 1, ChildWinArray.Length)
+        End If
+        If WinArray IsNot Nothing Then
+            Array.Clear(WinArray, 1, WinArray.Length - 1)
+        End If
+        If CodeListOfWindows IsNot Nothing Then
+            Array.Clear(CodeListOfWindows, 1, CodeListOfWindows.Length - 1)
+        End If
+
         CodeLine = Nothing
-        WinArray = Nothing
         CodeIsIfLine = Nothing
-        CodeListOfWindows = Nothing
         IEListFiltered = New List(Of InternetExplorer)
 
         ' Get list of windows
@@ -180,6 +191,7 @@ Public Class Form1
     Public Function ParseAndAct(ByVal win As TargetWindowPlain, ByVal ce As CodeLine) As Boolean
 
         Dim CodeLine As String = ce.Line
+        Dim CodeActedOn As Boolean = False
         CodeIsIfLine = ce.IsIfLine
 
         ' Check to make sure line isn't a function break - if it is, reset all necessary variables
@@ -212,18 +224,30 @@ Public Class Form1
                     If IfCntr.BooleanMarker = "+" And InCountRange Then
                         win.TruthCount = win.TruthCount + 1
                         win.IfStatement = IfCntr
+                        If ce.BoolOp = ":NOR" Then          ' If command is :NOR and one is proven true, don't bother checking other conditions - :NOR occurs when 1 or more are true
+                            Exit For
+                        End If
                     End If
                     If IfCntr.BooleanMarker = "-" And Title.Contains(IfCntr.Needle) Then
                         win.TruthCount = win.TruthCount + 1
                         win.IfStatement = IfCntr
+                        If ce.BoolOp = ":NOR" Then
+                            Exit For
+                        End If
                     End If
                     If IfCntr.BooleanMarker = "=" And Title = IfCntr.Needle Then
                         win.TruthCount = win.TruthCount + 1
                         win.IfStatement = IfCntr
+                        If ce.BoolOp = ":NOR" Then
+                            Exit For
+                        End If
                     End If
                     If IfCntr.BooleanMarker = "~" And Title <> IfCntr.Needle Then
                         win.TruthCount = win.TruthCount + 1
                         win.IfStatement = IfCntr
+                        If ce.BoolOp = ":NOR" Then
+                            Exit For
+                        End If
                     End If
                 End If
 
@@ -246,6 +270,9 @@ Public Class Form1
                                 win.TruthCount = win.TruthCount + 1
                                 win.URLMarker = ie.LocationURL
                                 win.IsIE = True
+                                If ce.BoolOp = ":NOR" Then
+                                    Exit For
+                                End If
                             End If
                         End If
                         If IfCntr.BooleanMarker = "-" And (ie.LocationURL.Contains(IfCntr.Needle) = False) Then
@@ -253,6 +280,9 @@ Public Class Form1
                                 win.TruthCount = win.TruthCount + 1
                                 win.URLMarker = ie.LocationURL
                                 win.IsIE = True
+                                If ce.BoolOp = ":NOR" Then
+                                    Exit For
+                                End If
                             End If
                         End If
                         If IfCntr.BooleanMarker = "=" And ie.LocationURL = IfCntr.Needle Then
@@ -260,6 +290,9 @@ Public Class Form1
                                 win.TruthCount = win.TruthCount + 1
                                 win.URLMarker = ie.LocationURL
                                 win.IsIE = True
+                                If ce.BoolOp = ":NOR" Then
+                                    Exit For
+                                End If
                             End If
                         End If
                         If IfCntr.BooleanMarker = "~" And ie.LocationURL <> IfCntr.Needle Then
@@ -267,6 +300,9 @@ Public Class Form1
                                 win.TruthCount = win.TruthCount + 1
                                 win.URLMarker = ie.LocationURL
                                 win.IsIE = True
+                                If ce.BoolOp = ":NOR" Then
+                                    Exit For
+                                End If
                             End If
                         End If
 
@@ -276,7 +312,6 @@ Public Class Form1
                 ' HTML type
                 If IfCntr.Type = "htmlc" Then
 
-                    Dim DocStr As String
                     For Each ie As InternetExplorer In IEListFiltered
 
                         ' Check to make sure IE is valid - if not, skip the window
@@ -287,19 +322,12 @@ Public Class Form1
                         End Try
 
                         ' If IE window is busy, let it load and investigate it later (to prevent null reference exceptions)
-                        If Not ie.Busy Then
-                            DocStr = ie.Document.Body.InnerHTML
-                        Else
-                            Continue For
-                        End If
-
-                        ' If HTML text is null, come back to it later (to prevent null reference exception)
-                        If String.IsNullOrWhiteSpace(DocStr) Then
+                        If ie.ReadyState = 0 Then
                             Continue For
                         End If
 
                         ' Get/check count checks
-                        Dim InCountRange As Boolean = GetCount(IfCntr.Needle, DocStr, IfCntr.MinKeyCount, IfCntr.MaxKeyCount)
+                        Dim InCountRange As Boolean = GetCount(IfCntr.Needle, ie.Document.Body.InnerHTML, IfCntr.MinKeyCount, IfCntr.MaxKeyCount)
 
                         ' Booleans
                         Try
@@ -308,30 +336,43 @@ Public Class Form1
                                     win.TruthCount = win.TruthCount + 1
                                     win.URLMarker = ie.LocationURL
                                     win.IsIE = True
+                                    If ce.BoolOp = ":NOR" Then
+                                        Exit For
+                                    End If
                                 End If
                             End If
-                            If IfCntr.BooleanMarker = "-" And DocStr.Contains(IfCntr.Needle) = False Then
+                            If IfCntr.BooleanMarker = "-" And Not ie.Document.Body.InnerHTML.Contains(IfCntr.Needle) Then
                                 If win.HWND = ie.HWND Then
                                     win.TruthCount = win.TruthCount + 1
                                     win.URLMarker = ie.LocationURL
                                     win.IsIE = True
+                                    If ce.BoolOp = ":NOR" Then
+                                        Exit For
+                                    End If
                                 End If
                             End If
-                            If IfCntr.BooleanMarker = "=" And DocStr = IfCntr.Needle Then
+                            If IfCntr.BooleanMarker = "=" And ie.Document.Body.InnerHTML = IfCntr.Needle Then
                                 If win.HWND = ie.HWND Then
                                     win.TruthCount = win.TruthCount + 1
                                     win.URLMarker = ie.LocationURL
                                     win.IsIE = True
+                                    If ce.BoolOp = ":NOR" Then
+                                        Exit For
+                                    End If
                                 End If
                             End If
-                            If IfCntr.BooleanMarker = "~" And DocStr <> IfCntr.Needle Then
+                            If IfCntr.BooleanMarker = "~" And ie.Document.Body.InnerHTML <> IfCntr.Needle Then
                                 If win.HWND = ie.HWND Then
                                     win.TruthCount = win.TruthCount + 1
                                     win.URLMarker = ie.LocationURL
                                     win.IsIE = True
+                                    If ce.BoolOp = ":NOR" Then
+                                        Exit For
+                                    End If
                                 End If
                             End If
                         Catch ex As Exception
+                            IEListFiltered.Remove(ie)
                         End Try
                     Next
                 End If
@@ -346,27 +387,28 @@ Public Class Form1
 
 
             ' Boolean handling
-            Dim Conjunction As String = ce.BoolOp
-
             Dim AddList As New List(Of TargetWindowPlain)
-            If Conjunction = ":NOR" Then
+            If ce.BoolOp = ":NOR" Then
                 If win.TruthCount > 0 Then
                     win.TruthCount = 0
                     AddList.Add(win)
+                    CodeActedOn = True
                 End If
             End If
 
-            If Conjunction = ":XOR" Then
+            If ce.BoolOp = ":XOR" Then
                 If win.TruthCount = 1 Then
                     win.TruthCount = 0
                     AddList.Add(win)
+                    CodeActedOn = True
                 End If
             End If
 
-            If Conjunction = ":AND" Then
+            If ce.BoolOp = ":AND" Then
                 If win.TruthCount = ce.Actions.Length Then
                     win.TruthCount = 0
                     AddList.Add(win)
+                    CodeActedOn = True
                 End If
             End If
 
@@ -402,7 +444,7 @@ Public Class Form1
                     If win.IsIE Then
                         For Each ie As InternetExplorer In IEListFiltered
 
-                            If (ie.ReadyState > 1 And Not (String.IsNullOrWhiteSpace(ie.LocationURL))) Then
+                            If (ie.ReadyState > 0 And Not (String.IsNullOrWhiteSpace(ie.LocationURL))) Then
 
                                 ' Define booleans
                                 Dim TitleCheck, IECheck As Boolean
@@ -425,8 +467,14 @@ Public Class Form1
                     End If
                 End If
 
-            Next
 
+                ' Return operation as successful if "top-down single action mode" is enabled
+                '   This prevents the system from parsing any future commands for the window
+                If My.Settings.TopDownSingleAction And CodeActedOn Then
+                    Return 1
+                End If
+
+            Next
         End If
 
         ' If operation was successful, return 1
@@ -447,73 +495,69 @@ Public Class Form1
     '    Return
     'End Sub
 
-    Public Function EnumChildResults(ByVal Hwnd As Integer, ByVal lParam As Integer)
-        Dim ECR_ClassStr As New String(Nothing, 50)
-        Dim ECR_ClassLen As Integer = GetClass(Hwnd, ECR_ClassStr, 49)
+    'Public Function EnumChildResults(ByVal Hwnd As Integer, ByVal lParam As Integer)
+    '    Dim ECR_ClassStr As New String(Nothing, 50)
+    '    Dim ECR_ClassLen As Integer = GetClass(Hwnd, ECR_ClassStr, 49)
 
-        ECR_ClassStr = ECR_ClassStr.Substring(0, ECR_ClassLen)
+    '    ECR_ClassStr = ECR_ClassStr.Substring(0, ECR_ClassLen)
 
 
-        'Add window to ChildWinArray if its a valid tab
-        Try
-            Dim Catch2 As New Object
-            If ECR_ClassStr = "Internet Explorer_Server" Then
+    '    'Add window to ChildWinArray if its a valid tab
+    '    If ECR_ClassStr = "Internet Explorer_Server" Then
 
-                'Debug - Get Mr. Smith to give more efficient code?
-                For Each ie As InternetExplorer In New ShellWindows()
+    '        'Debug - Get Mr. Smith to give more efficient code?
+    '        For Each ie As InternetExplorer In New ShellWindows()
 
-                    'Dim C As Control = Control.FromChildHandle(Hwnd)
-                    'Console.WriteLine(C.Parent.Handle)
+    '            'Dim C As Control = Control.FromChildHandle(Hwnd)
+    '            'Console.WriteLine(C.Parent.Handle)
 
-                    ' Check all controls
-                    Dim IECtrl As New Control
-                    'IECtrl = Control.FromChildHandle
+    '            ' Check all controls
+    '            Dim IECtrl As New Control
+    '            'IECtrl = Control.FromChildHandle
 
-                Next
-                MsgBox("Done!")
-            End If
-        Catch ex As Exception
-        End Try
+    '        Next
+    '        MsgBox("Done!")
+    '    End If
 
-        ' This return statement is mandatory and CANNOT be changed without causing a bug
-        Return Hwnd
-    End Function
+    '    ' This return statement is mandatory and CANNOT be changed without causing a bug
+    '    Return Hwnd
+    'End Function
 
     ' Get number of strings in another string
     '   NOTE: Specifying a maximum count can slow this function down, because instead of counting the first [Minimum] occurrences, it must count each one
     Private Function GetCount(ByVal Needle As String, ByVal Haystack As String, ByVal MinCnt As String, ByVal MaxCnt As String) As String
 
         ' Exit out if haystack or needle is nill
-        'If String.IsNullOrEmpty(Needle) Or String.IsNullOrEmpty(Haystack) Then
-        '    Return 0
-        'End If
-
-        ' Main checking part
-        Dim StrA As String = Haystack.ToLower.Replace(Needle.ToLower, "")
-        Dim Count As Integer = Math.Round((Haystack.Length - StrA.Length) / Needle.Length)
-        Dim MeetsCounts As Boolean = False
-        Dim WordCnt As Integer = -1
-
-        ' Check minimums
-        If MinCnt.Contains("%") Then
-            WordCnt = Math.Round((StrA.Length - StrA.Replace(" ", "").Length) / Needle.Length)
-            MeetsCounts = ((Count / WordCnt) * 100) >= CInt(MinCnt.Replace("%", ""))
-        ElseIf MinCnt > 0 Then
-            MeetsCounts = (Count >= MinCnt)
-        Else
-            MeetsCounts = (Count > 0)
+        If String.IsNullOrEmpty(Needle) Or String.IsNullOrEmpty(Haystack) Then
+            Return False
         End If
 
-        ' Check maximums
-        If MaxCnt.Contains("%") Then
-            If WordCnt = -1 Then
+            ' Main checking part
+            Dim StrA As String = Haystack.ToLower.Replace(Needle.ToLower, "")
+            Dim Count As Integer = Math.Round((Haystack.Length - StrA.Length) / Needle.Length)
+            Dim MeetsCounts As Boolean = False
+            Dim WordCnt As Integer = -1
+
+            ' Check minimums
+            If MinCnt.Contains("%") Then
                 WordCnt = Math.Round((StrA.Length - StrA.Replace(" ", "").Length) / Needle.Length)
-                MeetsCounts = ((Count / WordCnt) * 100) <= CInt(MaxCnt.Replace("%", ""))
+                MeetsCounts = ((Count / WordCnt) * 100) >= CInt(MinCnt.Replace("%", ""))
+            ElseIf MinCnt > 0 Then
+                MeetsCounts = (Count >= MinCnt)
+            Else
+                MeetsCounts = (Count > 0)
             End If
-        ElseIf MaxCnt > 0 Then
-            MeetsCounts = (Count <= MinCnt)
-        End If
-        Return MeetsCounts
+
+            ' Check maximums
+            If MaxCnt.Contains("%") Then
+                If WordCnt = -1 Then
+                    WordCnt = Math.Round((StrA.Length - StrA.Replace(" ", "").Length) / Needle.Length)
+                End If
+                MeetsCounts = ((Count / WordCnt) * 100) <= CInt(MaxCnt.Replace("%", ""))
+            ElseIf MaxCnt > 0 Then
+                MeetsCounts = (Count <= MinCnt)
+            End If
+            Return MeetsCounts
 
     End Function
 End Class
