@@ -12,12 +12,24 @@ Public Delegate Function CallBack(ByVal hwnd As Integer, ByVal lParam As Integer
 Public Class Form1
     ' List of target windows (AllWindowsList)
     Dim AllWindowsList As New List(Of TargetWindowPlain)
+    Dim IETabList As New List(Of Integer)
 
     ' DLL Functions used
-    Declare Function GetForegroundWindow Lib "user32" () As Long
+    Declare Function GetWindow Lib "user32" (ByVal hWnd As Integer, ByVal uCmd As Integer) As Integer
+    'Declare Function GetForegroundWindow Lib "user32" () As Long
     Declare Function EnumWindows Lib "user32" (ByVal CallBackPtr As CallBack, ByVal lParam As Integer) As Boolean
+    Declare Function EnumChildWindows Lib "user32" (ByVal Hwnd As Integer, ByVal CallBackPtr As CallBack, ByVal lParam As Integer) As Boolean
+
+    Declare Ansi Function SendMessageTimeoutA Lib "user32" (ByVal hWnd As IntPtr, ByVal Msg As Integer, ByVal wParam As Integer, ByVal lParam As Integer, ByVal fuFlags As Integer, ByVal uTimeout As Integer, ByRef lpdwResult As Integer) As Integer
+    Declare Function RegisterWindowMessageA Lib "user32" (ByVal lpString As String) As Integer
+    Declare Function ObjectFromLresult Lib "oleacc" (ByVal lResult As Integer, ByVal riid As System.Guid, ByVal wParam As Integer, ByRef ppvObject As HtmlDocument) As Integer
+    Declare Function AccessibleObjectFromWindow Lib "oleacc" (ByVal hwnd As Integer, ByVal dwObjectID As Int32, ByVal riid As Guid, <MarshalAs(UnmanagedType.IUnknown)> ByRef ppvObject As Object) As String
+
     Declare Function IsWindowVisible Lib "user32" (ByVal Hwnd As Integer) As Boolean
+    Declare Function GetClass Lib "user32" Alias "RealGetWindowClass" (ByVal hWnd As IntPtr, ByVal pszType As String, ByVal cchType As IntPtr) As UInteger
     Declare Function DestroyWindow Lib "user32" (ByVal Hwnd As Integer)
+
+    Dim ChildWinArray As Array
     Public Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
 
         ' Get Nighthawk rules code (raw)
@@ -45,6 +57,8 @@ Public Class Form1
         Dim CodeIsIfLine As Boolean
         Dim DBGESC As Integer = 0
         Dim LayerCount As Integer = 0
+        Dim TitleConditions As New List(Of IfStatement)
+        Dim IEListFiltered As New List(Of InternetExplorer)
 
         While True
             CodeIsIfLine = False
@@ -116,6 +130,13 @@ Public Class Form1
                     Dim TargetArrayLine As Array = Nothing
                     Dim Int As Integer = CodeIfArray.Length
 
+                    ' Get list of all InternetExplorer instances
+                    For Each win As InternetExplorer In New ShellWindows
+                        If (win.Name = "Windows Internet Explorer") Then
+                            IEListFiltered.Add(win)
+                        End If
+                    Next
+
                     ' Parse each if
                     DBGESC = 0
                     Dim DBGINT As Integer = 0
@@ -124,15 +145,20 @@ Public Class Form1
 
 
                         ' Title (Type)
+                        '   NOTE: This title-based system cannot redirect tabbed windows using URL markers (uses tab titles instead)
                         If IfCntr.Type = "title" Then
 
                             'Check each window in window list
                             For Each win As TargetWindowPlain In WinArray
 
-
                                 ' Get # of times needle occurs in title
                                 Dim Title As String = win.Title
                                 Dim IncidenceNum As Integer = GetCount(IfCntr.Needle, Title)
+
+                                ' If title contains Internet Explorer marker, set Win.IsIE to TRUE
+                                If Title.Contains("Internet Explorer") Then
+                                    win.IsIE = True
+                                End If
 
                                 ' Get/check count checks
                                 Dim InCountRange As Boolean = True
@@ -144,17 +170,22 @@ Public Class Form1
                                 End If
 
                                 ' Booleans (if the window satifies the condition, its truth count is increased by 1)
+                                '   Note: Since URL's can be retrieved from these windows, if statements are used as UIDs (which are then re-parsed against all IE windows at function run to see if they match up)
                                 If IfCntr.BooleanMarker = "+" And Title.Contains(IfCntr.Needle) And InCountRange Then
                                     win.TruthCount = win.TruthCount + 1
+                                    win.IfStatement = IfCntr
                                 End If
                                 If IfCntr.BooleanMarker = "-" And Title.Contains(IfCntr.Needle) = False And InCountRange Then
                                     win.TruthCount = win.TruthCount + 1
+                                    win.IfStatement = IfCntr
                                 End If
                                 If IfCntr.BooleanMarker = "=" And Title = IfCntr.Needle Then
                                     win.TruthCount = win.TruthCount + 1
+                                    win.IfStatement = IfCntr
                                 End If
                                 If IfCntr.BooleanMarker = "~" And Title <> IfCntr.Needle Then
                                     win.TruthCount = win.TruthCount + 1
+                                    win.IfStatement = IfCntr
                                 End If
                             Next
 
@@ -164,7 +195,7 @@ Public Class Form1
                         If IfCntr.Type = "urlid" Then
 
                             ' Search through AllWindowsList for the proper window(s) to interact with
-                            For Each ie As InternetExplorer In New ShellWindows()
+                            For Each ie As InternetExplorer In IEListFiltered
 
                                 ' If window isn't an IE window, skip it (ShellWindows contains IE and normal folder windows)
                                 If ie.Name <> "Windows Internet Explorer" Then
@@ -178,9 +209,10 @@ Public Class Form1
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
-
                                 End If
                                 If IfCntr.BooleanMarker = "-" And (ie.LocationURL.Contains(IfCntr.Needle) = False) Then
 
@@ -188,6 +220,8 @@ Public Class Form1
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
 
@@ -198,6 +232,8 @@ Public Class Form1
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
 
@@ -208,6 +244,8 @@ Public Class Form1
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
 
@@ -218,7 +256,7 @@ Public Class Form1
                         ' HTML type
                         If IfCntr.Type = "htmlc" Then
                             Dim DocStr As String
-                            For Each ie As InternetExplorer In New ShellWindows()
+                            For Each ie As InternetExplorer In IEListFiltered
 
                                 ' If window isn't an IE window, don't bother analyzing it for HTML content (ShellWindows() returns folders too)
                                 If ie.Name <> "Windows Internet Explorer" Then
@@ -237,6 +275,7 @@ Public Class Form1
                                     Continue For
                                 End If
 
+
                                 Dim IncidenceNum As Integer = GetCount(IfCntr.Needle, DocStr)
 
                                 ' Get/check count checks
@@ -249,13 +288,14 @@ Public Class Form1
                                 End If
 
                                 ' Booleans
-
                                 If IfCntr.BooleanMarker = "+" And DocStr.Contains(IfCntr.Needle) And InCountRange Then
 
                                     ' Find relevant window
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
 
@@ -266,6 +306,8 @@ Public Class Form1
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
 
@@ -276,6 +318,8 @@ Public Class Form1
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
 
@@ -286,6 +330,8 @@ Public Class Form1
                                     For Each win As TargetWindowPlain In WinArray
                                         If win.HWND = ie.HWND Then
                                             win.TruthCount = win.TruthCount + 1
+                                            win.URLMarker = ie.LocationURL
+                                            win.IsIE = True
                                         End If
                                     Next
 
@@ -353,69 +399,74 @@ Public Class Form1
                 ' Function parsing
                 If Not CodeIsIfLine Then
 
-                    Try
 
-                        CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
+                    CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
 
-                        ' WIP
-                        For Each funcStr As String In CodeFuncArray
+                    ' WIP
+                    For Each funcStr As String In CodeFuncArray
 
-                            ' Make sure function isn't nil
-                            If funcStr Is Nothing Then
-                                Continue For
+                        ' Make sure function isn't nil
+                        If funcStr Is Nothing Then
+                            Continue For
+                        End If
+                        If funcStr.Length < 2 Or String.IsNullOrWhiteSpace(funcStr) Then
+                            Continue For
+                        End If
+
+                        Dim func As New FunctionPlain(funcStr)
+                        Dim FuncFirstArg As String = FunctionPlain.GetParam(func.Statement, 1)
+
+                        ' Entire window list commands (!Msg, !Snd)
+                        If (CodeListOfWindows.Count > 0) Then
+                            If func.Type = "!msg" Then
+                                MsgBox(FuncFirstArg)
                             End If
-                            If funcStr.Length < 2 Or String.IsNullOrWhiteSpace(funcStr) Then
-                                Continue For
+                            If func.Type = "!snd" Then
+                                My.Computer.Audio.Play(FuncFirstArg)
                             End If
+                        End If
 
-                            Dim func As New FunctionPlain(funcStr)
-                            Dim FuncFirstArg As String = FunctionPlain.GetParam(func.Statement, 1)
+                        For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
 
-                            ' Entire window list commands (!Msg, !Snd)
-                            If (CodeListOfWindows.Count > 0) Then
-                                If func.Type = "!msg" Then
-                                    MsgBox(FuncFirstArg)
-                                End If
-                                If func.Type = "!snd" Then
-                                    My.Computer.Audio.Play(FuncFirstArg)
-                                End If
-                            End If
+                            ' Per-window commands (!Dir, !ClP, !ClW, !DlP, !DlR, !Opn, !Cls) --> Delete process / Delete registry entries / Unlock (permissions) / Lock (permissions)
+                            'If func.Type = "!clw" Then
+                            '   DestroyWindow(win.HWND)
+                            '   Add to acted on list
+                            '   CodeActedOnList.Add(ie.HWND)
+                            'End If
 
-                            For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
+                            If func.Type = "!dir" Then
+                                For Each ie As InternetExplorer In IEListFiltered
+                                    If ((ie.ReadyState = 4 Or ie.ReadyState = 0) And Not (String.IsNullOrWhiteSpace(ie.LocationURL))) Then
 
-                                ' Per-window commands (!Dir, !ClP, !ClW, !DlP, !DlR, !Opn, !Cls) --> Delete process / Delete registry entries / Unlock (permissions) / Lock (permissions)
-                                'If func.Type = "!clw" Then
-                                '   DestroyWindow(win.HWND)
-                                '   Add to acted on list
-                                '   CodeActedOnList.Add(ie.HWND)
-                                'End If
+                                        ' Define booleans
+                                        Dim TitleCheck, IECheck As Boolean
 
-
-                                If func.Type = "!dir" Then
-                                    For Each ie As InternetExplorer In New ShellWindows()
-                                        If ie.HWND = win.HWND And ie.Name = "Windows Internet Explorer" And (ie.Busy = False) Then
-
-                                            If (ie.ReadyState = 4 Or ie.ReadyState = 0) And Not (String.IsNullOrWhiteSpace(ie.LocationURL)) Then
-
-                                                ' Act on window if it hasn't been acted on
-                                                If Not CodeActedOnList.Contains(ie.HWND) Then
-                                                    ie.Navigate(FuncFirstArg)
-                                                End If
-
-                                                '  Add to acted on list
-                                                CodeActedOnList.Add(ie.HWND)
-                                            End If
-
-                                            Exit For
+                                        ' Check title based search
+                                        If (win.IfStatement IsNot Nothing) Then
+                                            TitleCheck = (IfStatement.CheckTitleTruth(ie.LocationName, win.IfStatement) = 1)
+                                        Else
+                                            TitleCheck = False
                                         End If
-                                    Next
-                                End If
 
-                            Next
+                                        ' Check IE property search (URL markers)
+                                        IECheck = ie.LocationURL.Equals(win.URLMarker)
+
+
+                                        If (TitleCheck Or IECheck) And win.IsIE And (CodeActedOnList.Contains(ie.HWND) = False) Then
+
+                                            ie.Navigate(FuncFirstArg)
+
+                                            '  Add to acted on list
+                                            CodeActedOnList.Add(ie.HWND)
+                                        End If
+
+                                    End If
+                                Next
+                            End If
+
                         Next
-
-                    Catch ex As Exception
-                    End Try
+                    Next
 
                 End If
 
@@ -429,6 +480,50 @@ Public Class Form1
         Dim NilInt As Integer = EnumWindows(AddressOf EnumResults, 0)
         Return
     End Sub
+
+
+    ' Scan function - scans individual windows for their compliance with the terms listed in the rules file
+
+    ' List all child windows of a window
+    'Public Sub ListChildWindows(ByVal Hwnd As Integer)
+    '    ChildWinArray = Nothing
+    '    Dim NilInt As Integer = EnumChildWindows(Hwnd, AddressOf EnumChildResults, 0)
+
+    '    ChildWinArray.SetValue(Hwnd,
+    '    Return
+    'End Sub
+
+    Public Function EnumChildResults(ByVal Hwnd As Integer, ByVal lParam As Integer)
+        Dim ECR_ClassStr As New String(Nothing, 50)
+        Dim ECR_ClassLen As Integer = GetClass(Hwnd, ECR_ClassStr, 49)
+
+        ECR_ClassStr = ECR_ClassStr.Substring(0, ECR_ClassLen)
+
+
+        'Add window to ChildWinArray if its a valid tab
+        Try
+            Dim Catch2 As New Object
+            If ECR_ClassStr = "Internet Explorer_Server" Then
+
+                'Debug - Get Mr. Smith to give more efficient code?
+                For Each ie As InternetExplorer In New ShellWindows()
+                    
+                    'Dim C As Control = Control.FromChildHandle(Hwnd)
+                    'Console.WriteLine(C.Parent.Handle)
+
+                    ' Check all controls
+                    Dim IECtrl As New Control
+                    'IECtrl = Control.FromChildHandle
+
+                Next
+                MsgBox("Done!")
+            End If
+        Catch ex As Exception
+        End Try
+
+        ' This return statement is mandatory and CANNOT be changed without causing a bug
+        Return Hwnd
+    End Function
 
     ' Create a new instance of the TargetWindowPlain class for the given window and add it to the array of all windows
     Private Function EnumResults(ByVal hWnd As Integer, ByVal lParam As Integer)
@@ -460,22 +555,68 @@ Public Class Form1
         End If
 
         ' Main checking part
-        Dim StrA As String = Needle
+        Dim StrA As String = Haystack
         Dim Count As Integer = 0
         While StrA.Contains(Needle)
 
-            ' Check for contained matches
-            StrA.Remove(StrA.IndexOf(Needle), Needle.Length)
-            Count += 1
-
-            ' Check for exact matches (String.Remove doesn't catch these)
-            If (StrA = Needle) Then
+            ' If haystack doesn't contain/equal needle, exit loop
+            If Haystack <> Needle And (Haystack.Contains(Needle) = False) Then
                 Exit While
+                StrA = ""
+            End If
+
+            ' Check for exact matches (below method doesn't catch these)
+            If (StrA = Needle) Then
+                Count += 1
+                StrA = ""
+                Exit While
+            End If
+
+            ' Check for contained matches
+            If StrA.Contains(Needle) Then
+                StrA = StrA.Remove(StrA.IndexOf(Needle), Needle.Length)
+                Count += 1
+            ElseIf StrA <> Needle Then
+                Exit While
+                StrA = ""
             End If
 
         End While
         Return Count
     End Function
+
+    'Private Function GetHTML(ByVal hwnd As Integer, ByVal TabHwndList As List(Of Integer))
+
+    '    ' Misc
+    '    Dim HGUID As System.Guid = New System.Guid("626FC520-A41E-11CF-A731-00A0C9082637")
+    '    Const SMTO_ABORTIFHUNG As Int32 = &H2
+    '    Dim lRes As Int32
+    '    Dim hr As Int32
+
+    '    ' Register the message
+    '    Dim HMsg As Integer = RegisterWindowMessageA("WM_HTML_GETOBJECT")
+
+    '    ' Get the object
+    '    Call SendMessageTimeoutA(hwnd, HMsg, 0, 0, SMTO_ABORTIFHUNG, 1000, lRes)
+
+    '    If lRes Then
+
+    '        Dim test As HtmlDocument
+
+    '        Try
+    '            ' Get the object from lRes
+
+    '            'hr = ObjectFromLresult(lRes, HGUID, 0, test)
+    '            'Console.WriteLine(test.Url)
+    '        Catch ex As Exception
+    '        End Try
+
+    '        'If hr Then Throw New COMException(hr)
+
+    '    End If
+
+    'End Function
+
 End Class
 
 Public Class SystemFunctions
@@ -582,7 +723,7 @@ Public Class SystemFunctions
             Return Haystack
         End If
 
-        ' If Result is nothing, set it to a blank string
+        ' If Result is nothing, remove all occurrences of Needle from Haystack
         If (Result = Nothing) Then
             Result = ""
         End If
@@ -690,12 +831,39 @@ Public Class IfStatement
             Return StarterIf
         End Get
     End Property
+
+    ' Check truth of title (returns -1 if IfStatement isn't of type Title - meaning it won't work no matter what)
+    Shared Function CheckTitleTruth(ByVal PageTitle As String, ByVal IfCmdA As IfStatement)
+
+        ' Check for non-title if
+        If (IfCmdA.Type <> "title") Then
+            Return -1
+        End If
+
+        ' Parse title ifs - return whether or not a page title fulfills its boolean command
+        If (IfCmdA.BooleanMarker = "+") Then
+            Return PageTitle.Contains(IfCmdA.Needle)
+        End If
+        If (IfCmdA.BooleanMarker = "-") Then
+            Return (PageTitle.Contains(IfCmdA.Needle) = False)
+        End If
+        If (IfCmdA.BooleanMarker = "=") Then
+            Return PageTitle = IfCmdA.Needle
+        End If
+        If (IfCmdA.BooleanMarker = "~") Then
+            Return PageTitle <> IfCmdA.Needle
+        End If
+
+        ' If nothing has worked so far, return false value
+        Return -1
+    End Function
+
 End Class
 
 ' WIP
 Public Class TargetWindowPlain
     Declare Function GetWindowText Lib "user32" Alias "GetWindowTextA" (ByVal hWnd As Integer, ByVal lpString As String, ByVal nMaxCount As Integer) As Integer
-    Declare Function GetWindowProcess Lib "user32" Alias "GetWindowThreadProcessId" (ByVal hWnd As IntPtr, ByVal lpdwProcessId As String) As String
+    Declare Function GetWindowProcess Lib "user32" Alias "GetWindowThreadProcessId" (ByRef hWnd As IntPtr, <Out()> Optional ByVal lpdwProcessId As Int32 = 0)
 
     ' Property guide
     ' x.HWND    - returns Window Handle (HWND)
@@ -706,18 +874,18 @@ Public Class TargetWindowPlain
 
     ' Create Target Window data
     Dim TitleStr As New String(Nothing, 300)
-    Dim TargetHWND As Integer
-    Dim PrcNameStr As String
+    Dim TargetHWND, PrcNum As Integer
+    Dim URLMarkerStr As String
+    Dim IsIEBool As Boolean = False
+    Dim IfCmd As IfStatement
 
     Public Sub New(ByVal NewHWND As Integer)
         TargetHWND = NewHWND
 
         Dim StrLen As Integer = GetWindowText(TargetHWND, TitleStr, 300)
         TitleStr = TitleStr.Substring(0, StrLen)
-
+        URLMarkerStr = "none"
     End Sub
-
-
 
     ' Get HWND
     ReadOnly Property HWND As Integer
@@ -744,21 +912,40 @@ Public Class TargetWindowPlain
         End Get
     End Property
 
-    ' Get process name
-    ReadOnly Property ProcessName As String
+    ' Get process
+    'ReadOnly Property Process As Process
+    '    Get
+    '        Return PrcActual
+    '    End Get
+    'End Property
+
+    ' HTML unique characteristics - specify exact URL (in order to act on proper window)
+    Property URLMarker As String
         Get
-            Return PrcNameStr
+            Return URLMarkerStr
         End Get
+        Set(ByVal value As String)
+            URLMarkerStr = value
+        End Set
     End Property
 
-    ' Get process handle (IntPtr format)
-    ReadOnly Property ProcessPtr As String
+    ' Returns whether window is instance of Internet Explorer
+    Property IsIE As Boolean
         Get
-            Return TargetHWND
+            Return IsIEBool
         End Get
+        Set(ByVal IsInternetExplorer As Boolean)
+            IsIEBool = IsInternetExplorer
+        End Set
     End Property
 
-    ' Get process path
-
-    ' Get TargetWindowIE (if the window is an internet explorer window)
+    ' If statement that triggered the window (used for title + IE interaction)
+    Property IfStatement As IfStatement
+        Get
+            Return IfCmd
+        End Get
+        Set(ByVal value As IfStatement)
+            IfCmd = value
+        End Set
+    End Property
 End Class
