@@ -1,3 +1,5 @@
+' NOTE: Code can only go up to 11 layers deep (10 IF statements + 1 Function)
+
 Imports System
 Imports System.IO
 Imports System.Runtime.InteropServices
@@ -11,12 +13,13 @@ Public Class Form1
     ' List of target windows (AllWindowsList)
     Dim AllWindowsList As New List(Of TargetWindowPlain)
 
-    ' This one keeps track of the windows for each level
-    Dim CodeListOfWindows As List(Of List(Of TargetWindowPlain))
+    ' This one keeps track of the recorded windows in each level
+    Dim CodeListOfWindows()() As TargetWindowPlain = New TargetWindowPlain(10)() {}
 
     ' DLL Functions used
     Declare Function GetForegroundWindow Lib "user32" () As Long
     Declare Function EnumWindows Lib "user32" (ByVal CallBackPtr As CallBack, ByVal lParam As Integer) As Boolean
+    Declare Function IsWindowVisible Lib "user32" (ByVal Hwnd As Integer) As Boolean
     Private Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
 
         ' Get Nighthawk rules code (raw)
@@ -40,15 +43,12 @@ Public Class Form1
 
         ' Nighthawk rules code variables
         Dim CodeLine As String
-        Dim CodeIfArray As Array
-        Dim CodeFuncArray As Array
+        Dim CodeIfArray, CodeAllowedArray, CodeFuncArray As Array
         Dim CodeIsIfLine As Boolean
         Dim DBGESC As Integer = 0
-        Dim LayerCountBefore, LayerCountAfter As Integer
-        LayerCountAfter = 0
+        Dim LayerCount As Integer = 0
 
         While True
-            MsgBox("Moving")
             CodeIsIfLine = False
 
             ' Update list of all windows
@@ -63,8 +63,7 @@ Public Class Form1
 
                 CodeLine = CodeFile.ReadLine()
 
-                ' Pre-Analysis Layer Count
-                LayerCountBefore = Math.Round(CodeLine.LastIndexOf("-->") / 3)
+                MsgBox("Code:" & CodeLine)
 
                 ' Organize code and execute non-if/function tasks
                 If True Then
@@ -86,27 +85,21 @@ Public Class Form1
                 End If
 
                 ' Determine whether line is If or Function, and set up the relevant arrays
-                Dim CodeLineNoLMs As String = CodeLine.Replace("-->", "")
+                Dim CodeLineNoLMs As String
+                    CodeLineNoLMs = CodeLine.Replace("-->", "")
+
                 If CodeLineNoLMs.Length > 2 Then
 
                     If CodeLineNoLMs.Substring(0, 1) = ":" Then
-                        Try ' Getting out-of-bounds error on SeriesToIf
-                            CodeIfArray = SystemFunctions.SeriesToIf(CodeLineNoLMs)
-                        Catch ex As Exception
-                        End Try
-
+                        CodeIfArray = SystemFunctions.SeriesToIf(CodeLineNoLMs)
                         CodeFuncArray = Nothing
                         CodeIsIfLine = True
                     Else
                         CodeIfArray = Nothing
-
-                        Try
-                            CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
-                        Catch ex As Exception
-                        End Try
-
+                        CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
                         CodeIsIfLine = False
                     End If
+
 
 
                 Else
@@ -114,90 +107,163 @@ Public Class Form1
                     Continue While
                 End If
 
-
-
                 ' If the line is an IF line, conduct an if statement parse on each IfStatement in the array
                 If CodeIsIfLine Then
 
                     ' Define array of currently found windows
-                    'CodeIfArray = SystemFunctions.SeriesToIf(CodeLineNoLMs)
+                    CodeIfArray = SystemFunctions.SeriesToIf(CodeLineNoLMs)
 
-                    'Dim TargetArrayLine As Array = Nothing
-                    'Dim Int As Integer = CodeIfArray.Length
+                    ' Get array of previously validated windows (if there are any)
+                    LayerCount = Math.Floor((CodeLine.LastIndexOf("-->") + 2) / 3)
+                    If (LayerCount > 0) Then
+                        CodeAllowedArray = CodeListOfWindows.GetValue(LayerCount - 1)
+                    End If
 
-
+                    Dim TargetArrayLine As Array = Nothing
+                    Dim Int As Integer = CodeIfArray.Length
 
                     ' Parse each if
                     DBGESC = 0
+                    Dim DBGINT As Integer = 0
                     For Each IfCntr As IfStatement In CodeIfArray
+                        DBGINT += 1
+
 
                         ' Title(Type)
-                        If False Then '(IfCntr.Type = "title")
+                        If IfCntr.Type = "title" Then
 
-                            ' 'Check each window in window list
-                            ' For Each win As TargetWindowPlain In WinArray
-                            ' Dim Title As String = win.Title
+                            'Check each window in window list
+                            For Each win As TargetWindowPlain In WinArray
 
-                            ' ' Booleans (if the window satifies the condition, its truth count is increased by 1)
-                            ' If (IfCntr.BooleanMarker = "+" And Title.Contains(IfCntr.Needle)) Then
-                            ' win.TruthCount = win.TruthCount + 1
-                            ' End If
-                            ' If (IfCntr.BooleanMarker = "-" And (Title.Contains(IfCntr.Needle) = False)) Then
-                            ' win.TruthCount = win.TruthCount + 1
-                            ' End If
-                            ' If (IfCntr.BooleanMarker = "=" And Title = IfCntr.Needle) Then
-                            ' win.TruthCount = win.TruthCount + 1
-                            ' End If
-                            ' If (IfCntr.BooleanMarker = "~" And Title <> IfCntr.Needle) Then
-                            ' win.TruthCount = win.TruthCount + 1
-                            ' End If
-                            ' Next
+                                ' Get matching previous window
+                                Dim Title As String = win.Title
+                                If (LayerCount > 0) Then
+                                    Dim PastElement As TargetWindowPlain
+                                    PastElement = CodeAllowedArray.GetValue(Array.IndexOf(CodeAllowedArray, win))
+                                End If
+
+                                ' Booleans (if the window satifies the condition, its truth count is increased by 1)
+                                If (IfCntr.BooleanMarker = "+" And Title.Contains(IfCntr.Needle)) Then
+                                    win.TruthCount = win.TruthCount + 1
+                                End If
+                                If (IfCntr.BooleanMarker = "-" And (Title.Contains(IfCntr.Needle) = False)) Then
+                                    win.TruthCount = win.TruthCount + 1
+                                End If
+                                If (IfCntr.BooleanMarker = "=" And Title = IfCntr.Needle) Then
+                                    win.TruthCount = win.TruthCount + 1
+                                End If
+                                If (IfCntr.BooleanMarker = "~" And Title <> IfCntr.Needle) Then
+                                    win.TruthCount = win.TruthCount + 1
+                                End If
+                            Next
 
                         End If
 
-                        ' ' URL type
-                        ' If (IfCntr.Type = "urlid") Then
-                        ' For Each win As TargetWindowPlain In WinArray
+                        ' URL type
+                        If IfCntr.Type = "urlid" Then
 
-                        ' ' Search through AllWindowsList for the proper window(s) to interact with
-                        ' For Each ie As InternetExplorer In New ShellWindows()
+                            ' Search through AllWindowsList for the proper window(s) to interact with
+                            For Each ie As InternetExplorer In New ShellWindows()
+                                ' Booleans
+                                If IfCntr.BooleanMarker = "+" And ie.LocationURL.Contains(IfCntr.Needle) Then
 
-                        ' ' Booleans
-                        ' If (IfCntr.BooleanMarker = "+" And ie.LocationURL.Contains(IfCntr.Needle) And win.HWND = ie.HWND) Then
-                        ' win.TruthCount = win.TruthCount + 1
-                        ' MsgBox("SPOT " & win.Title)
-                        ' End If
-                        ' If (IfCntr.BooleanMarker = "-" And (ie.LocationURL.Contains(IfCntr.Needle) = False) And win.HWND = ie.HWND) Then
-                        ' win.TruthCount = win.TruthCount + 1
-                        ' End If
-                        ' If (IfCntr.BooleanMarker = "=" And ie.LocationURL = IfCntr.Needle And win.HWND = ie.HWND) Then
-                        ' win.TruthCount = win.TruthCount + 1
-                        ' End If
-                        ' If (IfCntr.BooleanMarker = "~" And ie.LocationURL <> IfCntr.Needle And win.HWND = ie.HWND) Then
-                        ' win.TruthCount = win.TruthCount + 1
-                        ' End If
-                        ' Next
-                        ' Next
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
 
-                        ' End If
+                                End If
+                                If IfCntr.BooleanMarker = "-" And (ie.LocationURL.Contains(IfCntr.Needle) = False) Then
+
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
+
+                                End If
+                                If IfCntr.BooleanMarker = "=" And ie.LocationURL = IfCntr.Needle Then
+
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
+
+                                End If
+                                If IfCntr.BooleanMarker = "~" And ie.LocationURL <> IfCntr.Needle Then
+
+                                    ' Find relevant window
+                                    For Each win As TargetWindowPlain In WinArray
+                                        If win.HWND = ie.HWND Then
+                                            win.TruthCount = win.TruthCount + 1
+                                        End If
+                                    Next
+
+                                End If
+                            Next
+                        End If
                     Next
                 End If
 
-                ' If code is function stuff (not if stuff)
+                'MsgBox("Done " & CodeIfArray.Length)
+
+                'If all IF statements are complete, handle conjunctions and update the cumulative window list (CodeListOfWindows)
+                If CodeIsIfLine Then
+                    LayerCount = Math.Floor((CodeLine.LastIndexOf("-->") + 2) / 3)
+                    Dim Conjunction As String = CodeLineNoLMs.Substring(0, 4)
+
+                    ' Boolean handling
+                    Dim AddList As New List(Of TargetWindowPlain)
+
+                    If Conjunction = ":NOR" Then
+                        For Each win As TargetWindowPlain In WinArray
+                            If win.TruthCount > 0 Then
+                                AddList.Add(win)
+                            End If
+                        Next
+                    End If
+
+                    If Conjunction = ":XOR" Then
+                        For Each win As TargetWindowPlain In WinArray
+                            If win.TruthCount = 1 Then
+                                AddList.Add(win)
+                            End If
+                        Next
+                    End If
+
+                    If Conjunction = ":AND" Then
+                        For Each win As TargetWindowPlain In WinArray
+                            If win.TruthCount = CodeIfArray.Length Then
+                                AddList.Add(win)
+                            End If
+                        Next
+                    End If
+
+                    CodeListOfWindows.SetValue(AddList.ToArray, LayerCount)
+                End If
+
+                ' DEBUG ATM
                 If Not CodeIsIfLine Then
-                    'CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
+                    CodeFuncArray = SystemFunctions.SeriesToFunction(CodeLineNoLMs)
+
+                    For Each win As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount)
+
+                        If win.Title <> "" And win.TruthCount <> 1 Then
+                            Console.WriteLine("Truth: " & win.TruthCount & " / " & win.Title & " / " & CodeLineNoLMs)
+                        End If
+                        MsgBox("Recorded")
+                    Next
+
+                    Array.Clear(CodeListOfWindows, LayerCount, 1)
 
                 End If
 
-                ' Handle top-level window list (below - if system has progressed one)
-                'If (LayerCountAfter < LayerCountBefore) Then
-                ' TopWindowListRefresh(WinArray, True)
-                ' MsgBox("Progressed!")
-                'Else
-                ' TopWindowListRefresh(WinArray, False)
-                'End If
 
-                'LayerCountAfter = Math.Round(CodeLine.LastIndexOf("-->") / 3)
 
             End While
         End While
@@ -213,31 +279,22 @@ Public Class Form1
     ' Create a new instance of the TargetWindowPlain class for the given window and add it to the array of all windows
     Private Function EnumResults(ByVal hWnd As Integer, ByVal lParam As Integer)
 
-        ' Create new window istance
-        Dim TrgWin As New TargetWindowPlain(hWnd)
-        AllWindowsList.Capacity = AllWindowsList.Capacity + 1
+        ' (MAKE A SETTING FOR THIS!) Check to make sure window is visible (if not, don't add to the array)
+        If IsWindowVisible(hWnd) Then
 
-        ' Add it to a list (regardless of visibility/title, these will be checked later)
-        AllWindowsList.Add(TrgWin)
+            ' Create new window istance
+            Dim TrgWin As New TargetWindowPlain(hWnd)
+
+            AllWindowsList.Capacity = AllWindowsList.Capacity + 1
+
+            ' Add it to a list (regardless of visibility/title, these will be checked later)
+            AllWindowsList.Add(TrgWin)
+
+        End If
 
         ' This return statement is mandatory and CANNOT be changed without causing a bug
         Return hWnd
-    End Function
 
-    ' Add to/subtract from CodeListOfWindows
-    Private Function TopWindowListRefresh(ByVal WinArray As Array, ByVal Add As Boolean)
-
-        Dim WinList As New List(Of TargetWindowPlain)
-        WinList.AddRange(WinArray)
-
-        ' Add current array to CodeListOfWindows
-        If Add Then
-            CodeListOfWindows.Add(WinList)
-        Else
-            CodeListOfWindows.Remove(WinList)
-        End If
-
-        Return CodeListOfWindows
     End Function
 End Class
 
@@ -264,7 +321,6 @@ Public Class SystemFunctions
     End Function
 
     ' Take a line of if code and separate it into IfStatement objects
-    ' BROKEN - Causes IndexOutOfRange exception!
     Shared Function SeriesToIf(ByVal StarterIf As String)
         ' Basic replaces
         StarterIf = StarterIf
@@ -281,16 +337,17 @@ Public Class SystemFunctions
         StarterIf = SystemFunctions.SafeReplace(StarterIf, ":AND", "")
 
         ' Assign each individual if clause to an array as an IfStatement
-        Dim IfCnt As Integer = 1
+        Dim IfCnt As Integer = 0
         Dim StrArray As String()
         StrArray = StarterIf.Split("[()]")
-        Dim IfArray(StrArray.Length + 2) As IfStatement
+        Dim IfList As New List(Of IfStatement)
 
         Dim IfStr As String
-        For i = 1 To StrArray.Length + 1
+        For i = 0 To StrArray.Length - 1
 
             ' For exception handling
             IfStr = SystemFunctions.SafeReplace(StrArray(i), "()]", "")
+
             If IfStr = Nothing Or IfStr = "" Then
                 Continue For
             End If
@@ -298,20 +355,20 @@ Public Class SystemFunctions
             If (IfStr.Length < 3) Then
                 Continue For
             End If
+
             Dim First As String = IfStr.Substring(0, 1)
             If First <> "+" And First <> "-" And First <> "=" And First <> "~" Then
                 Continue For
             End If
 
             ' IfStatement defining/adding
-            Console.WriteLine("IfStr: " & IfStr)
             Dim IfPart As New IfStatement(IfStr)
-            IfArray(IfCnt) = IfPart
-            IfCnt += 1
+            IfList.Add(IfPart)
 
+            IfCnt += 1
         Next
 
-        Return IfArray
+        Return IfList.ToArray
     End Function
 
     ' Take a line of if code and separate it into function objects - note that these, unlike If objects, are simply strings (they only store one parameter - the type of function)
