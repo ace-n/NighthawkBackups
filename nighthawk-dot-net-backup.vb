@@ -26,6 +26,7 @@ Public Class Form1
     Declare Function DestroyWindow Lib "user32" (ByVal Hwnd As Integer)
 
     ' Global variable definitions
+    Dim NullArray As Array
     Dim RulesPath As String = My.Settings.EveryoneRules
     Dim CodeFile As New StreamReader(RulesPath)
     Dim CodeLineList As New List(Of CodeLine)
@@ -34,7 +35,6 @@ Public Class Form1
     Dim WinArray As Array
     Dim CodeIsIfLine As Boolean
     Dim IEListFiltered As New List(Of InternetExplorer)
-    Dim CodeListOfWindows()() As TargetWindowPlain = New TargetWindowPlain(10)() {}         ' This one keeps track of the recorded windows in each level
 
     Public Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
 
@@ -98,12 +98,66 @@ Public Class Form1
 
             ' Parse code (note that this has to store global variables!)
             For Each win As TargetWindowPlain In WinArray
-                For Each ce As CodeLine In CodeLineList
 
+                ' Define list of per-layer booleans
+                Dim TruthListLayers As New List(Of Integer)
+
+                For j = 0 To (CodeLineList.Count - 1)
+
+                    ' Get code line
+                    Dim ce As CodeLine = CodeLineList.Item(j)
+                    Console.WriteLine(j)
+
+                    ' Execute code
                     Try
-                        If ParseAndAct(win, ce) = 2 Then
-                            Call UpdateGlobals()
+                        Dim LineTruth As Integer
+
+                        ' Make sure TruthListLayers has the proper capacity
+
+
+                        ' Check to make sure truth for above layer exists (if layercount isn't 0);
+                        '   after all, if this truth is 0 nothing should happen and code parsing is just wasted processor power
+                        If ce.LayerCount > 0 Then
+
+                            If TruthListLayers.Item(ce.LayerCount - 1) = 1 Then
+
+                                ' Execute Code / Set truth layers in TruthListLayers
+                                If ce.IsIfLine Then
+                                    If TruthListLayers.Count > (ce.LayerCount + 1) Then
+                                        TruthListLayers.Item(ce.LayerCount) = ParseAndAct(win, ce)
+                                    Else
+                                        TruthListLayers.Add(ParseAndAct(win, ce))
+                                    End If
+
+                                Else
+                                    ParseAndAct(win, ce)
+                                End If
+                            Else
+                                If TruthListLayers.Count > (ce.LayerCount + 1) Then
+                                    TruthListLayers.Item(ce.LayerCount) = 0
+                                Else
+                                    TruthListLayers.Add(0)
+                                End If
+                            End If
+
+                        Else
+
+                            ' Execute code / Find truth of the item
+                            LineTruth = ParseAndAct(win, ce)
+
+                            ' If there is no spot on the list, add the item; otherwise, simply set the existing item to the current one
+                            If TruthListLayers.Count > (ce.LayerCount + 1) Then
+                                TruthListLayers.Item(ce.LayerCount) = LineTruth
+                            Else
+                                TruthListLayers.Add(LineTruth)
+                            End If
+
                         End If
+
+                    ' If a break line is returned, then update global variables
+                    If LineTruth = 2 Then
+                        Call UpdateGlobals()
+                    End If
                     Catch ex As Exception
                         SkipMainLoop = True
                         Exit For
@@ -129,16 +183,7 @@ Public Class Form1
         ' Dump all unneeded global variables in memory
         MyBase.Dispose()
         AllWindowsList.Clear()
-        If ChildWinArray IsNot Nothing Then
-            Array.Clear(ChildWinArray, 1, ChildWinArray.Length)
-        End If
-        If WinArray IsNot Nothing Then
-            Array.Clear(WinArray, 1, WinArray.Length - 1)
-        End If
-        If CodeListOfWindows IsNot Nothing Then
-            Array.Clear(CodeListOfWindows, 1, CodeListOfWindows.Length - 1)
-        End If
-
+        ChildWinArray = NullArray
         CodeLine = Nothing
         CodeIsIfLine = Nothing
         IEListFiltered = New List(Of InternetExplorer)
@@ -164,7 +209,6 @@ Public Class Form1
         WinArray = AllWindowsList.ToArray
 
         ' Misc
-        CodeListOfWindows = New TargetWindowPlain(10)() {}
         CodeIsIfLine = False
 
         Return
@@ -188,10 +232,11 @@ Public Class Form1
 
     ' This function parses a window with a given handle (for both ifs and functions)
     '   This one-window-at-a-time parsing allows "emergency parsing" of recently changed windows (to cut down on response time)
-    Public Function ParseAndAct(ByVal win As TargetWindowPlain, ByVal ce As CodeLine) As Boolean
+    Public Function ParseAndAct(ByVal win As TargetWindowPlain, ByVal ce As CodeLine) As Integer
 
         Dim CodeLine As String = ce.Line
         Dim CodeActedOn As Boolean = False
+        Dim TruthOfOperation As Integer = 0
         CodeIsIfLine = ce.IsIfLine
 
         ' Check to make sure line isn't a function break - if it is, reset all necessary variables
@@ -376,48 +421,44 @@ Public Class Form1
                         End Try
                     Next
                 End If
-
             Next
         End If
 
         '    'MsgBox("Done " & CodeIfArray.Length)
 
-        ''If all IF statements are complete, handle conjunctions and update the cumulative window list (CodeListOfWindows)
-        If Not CodeIsIfLine Then
+        ' Handle conjunctions (if the code is an if line)
+        If CodeIsIfLine Then
 
 
             ' Boolean handling
-            Dim AddList As New List(Of TargetWindowPlain)
             If ce.BoolOp = ":NOR" Then
                 If win.TruthCount > 0 Then
                     win.TruthCount = 0
-                    AddList.Add(win)
-                    CodeActedOn = True
+                    TruthOfOperation = 1
                 End If
             End If
 
             If ce.BoolOp = ":XOR" Then
                 If win.TruthCount = 1 Then
                     win.TruthCount = 0
-                    AddList.Add(win)
-                    CodeActedOn = True
+                    TruthOfOperation = 1
                 End If
             End If
 
             If ce.BoolOp = ":AND" Then
                 If win.TruthCount = ce.Actions.Length Then
                     win.TruthCount = 0
-                    AddList.Add(win)
-                    CodeActedOn = True
+                    TruthOfOperation = 1
                 End If
             End If
-
-            CodeListOfWindows.SetValue(AddList.ToArray, ce.LayerCount)
 
         End If
 
         ' Function parsing
         If Not CodeIsIfLine Then
+
+            'Try
+
             For Each func As FunctionPlain In ce.Actions
 
                 Dim FuncFirstArg As String = FunctionPlain.GetParam(func.Statement, 1)
@@ -433,11 +474,11 @@ Public Class Form1
 
                 '' Parse previously targeted windows
                 ' BELOW IS BROKEN
-                'For Each win2 As TargetWindowPlain In CodeListOfWindows.GetValue(LayerCount - 1)
 
                 '    ' Per-window commands (!Dir, !ClP, !ClW, !DlP, !DlR, !Opn, !Cls) --> Delete process / Delete registry entries / Unlock (permissions) / Lock (permissions)
                 '    If func.Type = "!clw" Then
                 '        DestroyWindow(win.HWND)
+                '       CodeActedOn = True
                 '    End If
 
                 If func.Type = "!dir" Then
@@ -460,6 +501,7 @@ Public Class Form1
                                 IECheck = ie.LocationURL.Equals(win.URLMarker)
                                 If (TitleCheck Or IECheck) And win.IsIE Then
                                     ie.Navigate(FuncFirstArg)
+                                    CodeActedOn = True
                                 End If
 
                             End If
@@ -475,14 +517,16 @@ Public Class Form1
                 End If
 
             Next
+
+            'Catch ex As Exception
+
+            'End Try
+
         End If
 
-        ' If operation was successful, return 1
-        Return 1
+        ' If operation was successful, return the truth of the operation (0 = false, 1 = true)
+        Return TruthOfOperation
     End Function
-
-
-
 
     ' Scan function - scans individual windows for their compliance with the terms listed in the rules file
 
@@ -532,32 +576,32 @@ Public Class Form1
             Return False
         End If
 
-            ' Main checking part
-            Dim StrA As String = Haystack.ToLower.Replace(Needle.ToLower, "")
-            Dim Count As Integer = Math.Round((Haystack.Length - StrA.Length) / Needle.Length)
-            Dim MeetsCounts As Boolean = False
-            Dim WordCnt As Integer = -1
+        ' Main checking part
+        Dim StrA As String = Haystack.ToLower.Replace(Needle.ToLower, "")
+        Dim Count As Integer = Math.Round((Haystack.Length - StrA.Length) / Needle.Length)
+        Dim MeetsCounts As Boolean = False
+        Dim WordCnt As Integer = -1
 
-            ' Check minimums
-            If MinCnt.Contains("%") Then
+        ' Check minimums
+        If MinCnt.Contains("%") Then
+            WordCnt = Math.Round((StrA.Length - StrA.Replace(" ", "").Length) / Needle.Length)
+            MeetsCounts = ((Count / WordCnt) * 100) >= CInt(MinCnt.Replace("%", ""))
+        ElseIf MinCnt > 0 Then
+            MeetsCounts = (Count >= MinCnt)
+        Else
+            MeetsCounts = (Count > 0)
+        End If
+
+        ' Check maximums
+        If MaxCnt.Contains("%") Then
+            If WordCnt = -1 Then
                 WordCnt = Math.Round((StrA.Length - StrA.Replace(" ", "").Length) / Needle.Length)
-                MeetsCounts = ((Count / WordCnt) * 100) >= CInt(MinCnt.Replace("%", ""))
-            ElseIf MinCnt > 0 Then
-                MeetsCounts = (Count >= MinCnt)
-            Else
-                MeetsCounts = (Count > 0)
             End If
-
-            ' Check maximums
-            If MaxCnt.Contains("%") Then
-                If WordCnt = -1 Then
-                    WordCnt = Math.Round((StrA.Length - StrA.Replace(" ", "").Length) / Needle.Length)
-                End If
-                MeetsCounts = ((Count / WordCnt) * 100) <= CInt(MaxCnt.Replace("%", ""))
-            ElseIf MaxCnt > 0 Then
-                MeetsCounts = (Count <= MinCnt)
-            End If
-            Return MeetsCounts
+            MeetsCounts = ((Count / WordCnt) * 100) <= CInt(MaxCnt.Replace("%", ""))
+        ElseIf MaxCnt > 0 Then
+            MeetsCounts = (Count <= MinCnt)
+        End If
+        Return MeetsCounts
 
     End Function
 End Class
@@ -758,7 +802,6 @@ Public Class TargetWindowPlain
     Public Sub New(ByVal NewHWND As Integer)
 
         TargetHWND = NewHWND
-
         Dim StrLen As Integer = GetWindowText(TargetHWND, TitleStr, 300)
         TitleStr = TitleStr.Substring(0, StrLen)
         URLMarkerStr = "none"
@@ -891,7 +934,6 @@ Public Class CodeLine
     End Property
 
     ' Take a line of if code and separate it into IfStatement objects
-    ' BROKEN ATM
     Shared Function SeriesToIf(ByVal StarterIf As String) As Array
 
         ' Basic replaces
